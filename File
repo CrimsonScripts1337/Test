@@ -986,12 +986,11 @@ do
 			Button.Text = ""
 			--
 			Accent.Name = "Accent"
-            Accent.Position = UDim2.new(0,0,0,3)
-            Accent.Size = UDim2.new(0,1,1,-6)
-            Accent.BackgroundColor3 = Library.Accent
-            Accent.BorderSizePixel = 0
-            Accent.ZIndex = 54
-            Accent.BackgroundTransparency = 1
+			Accent.Size = UDim2.new(0,1,1,0)
+			Accent.BackgroundColor3 = Library.Accent
+			Accent.BorderSizePixel = 0
+			Accent.ZIndex = 54
+			Accent.BackgroundTransparency = 0.5
 			--
 			Frame.Position = UDim2.new(0,1,0,0)
 			Frame.Size = UDim2.new(1,-2,1,0)
