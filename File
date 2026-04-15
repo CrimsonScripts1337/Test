@@ -267,7 +267,7 @@ do
 					if v:IsA("Frame") or v:IsA("TextButton") then
 						if v.BackgroundTransparency ~= 1 then
 							task.spawn(function()
-								local t = game:GetService("TweenService"):Create(v, TweenInfo.new(0.25, Enum.EasingStyle.Linear, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In), {BackgroundTransparency = bool and (v.Name == "Accent" and 0.5 or 0) or 0.95})
+								local t = game:GetService("TweenService"):Create(v, TweenInfo.new(0.25, Enum.EasingStyle.Linear, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In), {BackgroundTransparency = bool and (v.Name == "Accent" and v.BackgroundTransparency or 0) or 0.95})
 								t.Completed:Connect(function()
 									if bool == false then
 										Library.Holder.Visible = false
