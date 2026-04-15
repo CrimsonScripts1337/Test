@@ -1020,7 +1020,7 @@ do
 			NewSection.BackgroundTransparency = 1
 			NewSection.BorderSizePixel = 0
 			NewSection.BorderColor3 = Color3.new(0,0,0)
-			NewSection.Visible = true
+			NewSection.Visible = false
 			--
 			Left.Name = "Left"
 			Left.Position = UDim2.new(0,2,0,0)
@@ -1182,6 +1182,8 @@ do
 					end
 				end
 			end)
+
+            Section:Turn(false)
 
 			if #Section.Page.Sections == 0 then
 				Section:Turn(true);
