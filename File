@@ -1169,7 +1169,7 @@ do
                     table.remove(Library.ThemeObjects, table.find(Library.ThemeObjects, Title))
                     Title.TextColor3 = Color3.fromRGB(78,78,78)
                 end
-                Accent.BackgroundTransparency = Section.Open and 0 or 1
+                Accent.BackgroundTransparency = Section.Open and 0 or 0.5
             end;
 
 			Button.MouseButton1Click:Connect(function()
