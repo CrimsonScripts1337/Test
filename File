@@ -1165,11 +1165,18 @@ do
                 if Section.Open then
                     table.insert(Library.ThemeObjects, Title)
                     Title.TextColor3 = Library.Accent
+                    Accent.BackgroundTransparency = 0
+                    Frame.BackgroundTransparency = 0
+                    Frame.BorderSizePixel = 0
+                    UIGradient.Enabled = true
                 else
                     table.remove(Library.ThemeObjects, table.find(Library.ThemeObjects, Title))
                     Title.TextColor3 = Color3.fromRGB(78,78,78)
+                    Accent.BackgroundTransparency = 1
+                    Frame.BackgroundTransparency = 1
+                    Frame.BorderSizePixel = 0
+                    UIGradient.Enabled = false
                 end
-                Accent.BackgroundTransparency = Section.Open and 0 or 1
             end;
 
 			Button.MouseButton1Click:Connect(function()
