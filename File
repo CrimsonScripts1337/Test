@@ -1160,17 +1160,18 @@ do
 
 			-- // Connections
 			function Section:Turn(bool)
-				Section.Open = bool
-				NewSection.Visible = Section.Open
-				if Section.Open then
-					table.insert(Library.ThemeObjects, Title)
-					Title.TextColor3 = Library.Accent
-				else
-					table.remove(Library.ThemeObjects, table.find(Library.ThemeObjects, Title))
-					Title.TextColor3 = Color3.fromRGB(78,78,78)
-				end
-				Accent.BackgroundTransparency = Section.Open and 0 or 0.5
-			end;
+                Section.Open = bool
+                NewSection.Visible = Section.Open
+                Frame.Visible = Section.Open
+                if Section.Open then
+                    table.insert(Library.ThemeObjects, Title)
+                    Title.TextColor3 = Library.Accent
+                else
+                    table.remove(Library.ThemeObjects, table.find(Library.ThemeObjects, Title))
+                    Title.TextColor3 = Color3.fromRGB(78,78,78)
+                end
+                Accent.BackgroundTransparency = Section.Open and 0 or 1
+            end;
 
 			Button.MouseButton1Click:Connect(function()
 				if not Section.Open then
