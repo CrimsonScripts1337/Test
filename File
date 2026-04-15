@@ -1020,7 +1020,7 @@ do
 			NewSection.BackgroundTransparency = 1
 			NewSection.BorderSizePixel = 0
 			NewSection.BorderColor3 = Color3.new(0,0,0)
-			NewSection.Visible = false
+			NewSection.Visible = true
 			--
 			Left.Name = "Left"
 			Left.Position = UDim2.new(0,2,0,0)
