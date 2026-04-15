@@ -1163,10 +1163,15 @@ do
                 Section.Open = bool
                 NewSection.Visible = Section.Open
                 if Section.Open then
-                    table.insert(Library.ThemeObjects, Title)
+                    if not table.find(Library.ThemeObjects, Title) then
+                        table.insert(Library.ThemeObjects, Title)
+                    end
                     Title.TextColor3 = Library.Accent
                 else
-                    table.remove(Library.ThemeObjects, table.find(Library.ThemeObjects, Title))
+                    local Index = table.find(Library.ThemeObjects, Title)
+                    if Index then
+                        table.remove(Library.ThemeObjects, Index)
+                    end
                     Title.TextColor3 = Color3.fromRGB(78,78,78)
                 end
                 Accent.BackgroundTransparency = Section.Open and 0 or 0.5
@@ -1185,14 +1190,14 @@ do
 
             Section:Turn(false)
 
-			if #Section.Page.Sections == 0 then
-				Section:Turn(true);
-			end;
+			local FirstSection = #Section.Page.Sections == 0
 
-			-- // Return
-			Section.Elements = {Left = LeftContent, Right = RightConnect};
-			Section.Page.Sections[#Section.Page.Sections + 1] = Section;
-			return setmetatable(Section, Library.Sections)
+            Section.Elements = {Left = LeftContent, Right = RightConnect};
+            Section.Page.Sections[#Section.Page.Sections + 1] = Section
+
+            Section:Turn(FirstSection)
+
+            return setmetatable(Section, Library.Sections)
 		end
 		-- Plain text label for sections
 		function Sections:Label(Options)
