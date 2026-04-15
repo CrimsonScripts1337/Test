@@ -1172,8 +1172,8 @@ do
                 else
                     table.remove(Library.ThemeObjects, table.find(Library.ThemeObjects, Title))
                     Title.TextColor3 = Color3.fromRGB(78,78,78)
-                    Accent.BackgroundTransparency = 1
-                    Frame.BackgroundTransparency = 1
+                    Accent.BackgroundTransparency = 0.5
+                    Frame.BackgroundTransparency = 0.5
                     Frame.BorderSizePixel = 0
                     UIGradient.Enabled = false
                 end
