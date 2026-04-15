@@ -1459,18 +1459,11 @@ do
 						end
 
 						Library.Flags[Keybind.Flag .. "_KEY"] = newkey
-					elseif table.find({ "Always", "Toggle", "Hold" }, newkey) then
+					elseif table.find({ "Toggle", "Hold" }, newkey) then
 						Library.Flags[Keybind.Flag .. "_KEY STATE"] = newkey
 						Keybind.Mode = newkey
 						Mode.Text = Keybind.Mode == "Hold" and "[H]" or Keybind.Mode == "Toggle" and "[T]" or "[A]"
-						Cycle = Keybind.Mode == "Hold" and 1 or Keybind.Mode == "Toggle" and 2 or 3
-						if Keybind.Mode == "Always" then
-							State = true
-							if Keybind.Flag then
-								Library.Flags[Keybind.Flag] = State
-							end
-							Keybind.Callback(true)
-						end
+						Cycle = Keybind.Mode == "Hold" and 1 or Keybind.Mode == "Toggle" and 2 or 2
 					else
 						State = newkey
 						if Keybind.Flag then
@@ -1553,16 +1546,13 @@ do
 				--
 				Holder.MouseButton2Click:Connect(function()
 					Cycle += 1
-					if Cycle > 3 then
+					if Cycle > 2 then
 						Cycle = 1
 						set("Hold")
 						Mode.Text = "[H]"
 					elseif Cycle == 2 then
 						set("Toggle")
 						Mode.Text = "[T]"
-					elseif Cycle == 3 then
-						set("Always")
-						Mode.Text = "[A]"
 					elseif Cycle == 1 then
 						set("Hold")
 						Mode.Text = "[H]"
@@ -2601,18 +2591,11 @@ do
 					end
 
 					Library.Flags[Keybind.Flag .. "_KEY"] = newkey
-				elseif table.find({ "Always", "Toggle", "Hold" }, newkey) then
+				elseif table.find({ "Toggle", "Hold" }, newkey) then
 					Library.Flags[Keybind.Flag .. "_KEY STATE"] = newkey
 					Keybind.Mode = newkey
 					Mode.Text = Keybind.Mode == "Hold" and "[H]" or Keybind.Mode == "Toggle" and "[T]" or "[A]"
-					Cycle = Keybind.Mode == "Hold" and 1 or Keybind.Mode == "Toggle" and 2 or 3
-					if Keybind.Mode == "Always" then
-						State = true
-						if Keybind.Flag then
-							Library.Flags[Keybind.Flag] = State
-						end
-						Keybind.Callback(true)
-					end
+					Cycle = Keybind.Mode == "Hold" and 1 or Keybind.Mode == "Toggle" and 2 or 2
 				else
 					State = newkey
 					if Keybind.Flag then
@@ -2695,16 +2678,13 @@ do
 			--
 			Holder.MouseButton2Click:Connect(function()
 				Cycle += 1
-				if Cycle > 3 then
+				if Cycle > 2 then
 					Cycle = 1
 					set("Hold")
 					Mode.Text = "[H]"
 				elseif Cycle == 2 then
 					set("Toggle")
 					Mode.Text = "[T]"
-				elseif Cycle == 3 then
-					set("Always")
-					Mode.Text = "[A]"
 				elseif Cycle == 1 then
 					set("Hold")
 					Mode.Text = "[H]"
