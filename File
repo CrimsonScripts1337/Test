@@ -20,6 +20,12 @@ do
 		Gradient = nil;
 		UIGradient = nil;
 		Loading = false;
+		-- // Fade state (see Library:SetOpen)
+		FadeCache = setmetatable({}, {__mode = "k"}); -- [Instance] = {Property = realValue}
+		FadeToken = 0;
+		-- // Popups (dropdowns / colorpickers) are lifted here so scrolling frames don't clip them
+		Overlay = nil;
+		Popups = {};
 		Keys = {
 			[Enum.KeyCode.LeftShift] = "LS",
 			[Enum.KeyCode.RightShift] = "RS",
@@ -255,54 +261,200 @@ do
 			Library.Loading = false
 		end
 		--
-		function Library:SetOpen(bool)
-			if typeof(bool) == 'boolean' then
-				Library.Open = bool;
-
-				if bool then
-					Library.Holder.Visible = true
+		local TweenService = game:GetService("TweenService")
+		local RunService = game:GetService("RunService")
+		-- which transparency properties each class fades
+		local FadeProps = {
+			Frame = {"BackgroundTransparency"},
+			ScrollingFrame = {"BackgroundTransparency", "ScrollBarImageTransparency"},
+			TextLabel = {"BackgroundTransparency", "TextTransparency"},
+			TextButton = {"BackgroundTransparency", "TextTransparency"},
+			TextBox = {"BackgroundTransparency", "TextTransparency"},
+			ImageLabel = {"BackgroundTransparency", "ImageTransparency"},
+			ImageButton = {"BackgroundTransparency", "ImageTransparency"},
+			UIStroke = {"Transparency"},
+		}
+		local FadeTime = 0.25
+		--
+		-- Sets a transparency property in a fade-safe way. While the UI is faded out
+		-- the real value is stored and applied when the UI fades back in.
+		function Library:SetTransparency(Inst, Property, Value)
+			local Cache = Library.FadeCache[Inst]
+			if Cache and Cache[Property] ~= nil then
+				Cache[Property] = Value
+				if Library.Open then
+					-- fading in right now: retarget the running tween
+					TweenService:Create(Inst, TweenInfo.new(0.1), {[Property] = Value}):Play()
 				end
-
-				for _,v in next, Library.Instances do
-					if v:IsA("Frame") or v:IsA("TextButton") then
-						if v.BackgroundTransparency ~= 1 then
-							task.spawn(function()
-								local t = game:GetService("TweenService"):Create(v, TweenInfo.new(0.25, Enum.EasingStyle.Linear, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In), {BackgroundTransparency = bool and (v.Name == "Accent" and v.BackgroundTransparency or 0) or 0.95})
-								t.Completed:Connect(function()
-									if bool == false then
-										Library.Holder.Visible = false
-									end
-								end)
-								t:Play()
-							end)
-						end
-					elseif v:IsA("TextLabel") or v:IsA("TextButton") or v:IsA("TextBox") then
-						if v.TextTransparency ~= 1 and v.BackgroundTransparency == 1 then
-							task.spawn(function()
-								game:GetService("TweenService"):Create(v, TweenInfo.new(0.25, Enum.EasingStyle.Linear, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In), {TextTransparency = bool and 0 or 0.95}):Play()
-							end)
-						end
-					elseif v:IsA("UIStroke") then
-						task.spawn(function()
-							game:GetService("TweenService"):Create(v, TweenInfo.new(0.25, Enum.EasingStyle.Linear, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In), {Transparency = bool and 0 or 0.95}):Play()
-						end)
-					elseif v:IsA("ImageButton") then
-						task.spawn(function()
-							game:GetService("TweenService"):Create(v, TweenInfo.new(0.25, Enum.EasingStyle.Linear, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In), {ImageTransparency = bool and 0 or 0.95, BackgroundTransparency = bool and 0 or 0.95}):Play()
-						end)
-					end
-				end
-				task.spawn(function()
-					game:GetService("TweenService"):Create(Library.PageHolder, TweenInfo.new(0.25, Enum.EasingStyle.Quad, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In), {Position = bool and UDim2.new(0,60,0,0) or UDim2.new(0,0,0,0)}):Play()
-					--
-					if bool then
-						task.wait(0.05)
-					end
-					game:GetService("TweenService"):Create(Library.Gradient, TweenInfo.new(0.25, Enum.EasingStyle.Quad, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In), {Position = bool and UDim2.new(0.5,0,0,2) or UDim2.new(1,0,0,2)}):Play()
-					game:GetService("TweenService"):Create(Library.Gradient, TweenInfo.new(0.25, Enum.EasingStyle.Quad, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In), {Size = bool and UDim2.new(0.5,0,0,1) or UDim2.new(0,0,0,1)}):Play()
-				end)
+			else
+				Inst[Property] = Value
 			end
+		end
+		--
+		function Library:SetOpen(bool)
+			if typeof(bool) ~= 'boolean' then
+				return
+			end
+
+			Library.Open = bool
+			Library.FadeToken += 1
+			local Token = Library.FadeToken
+			local Info = TweenInfo.new(FadeTime, Enum.EasingStyle.Linear, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In)
+
+			if bool then
+				Library.Holder.Visible = true
+			else
+				Library:ClosePopups()
+			end
+
+			for _, v in next, Library.Instances do
+				local Props = typeof(v) == "Instance" and v.Parent and FadeProps[v.ClassName]
+				if Props then
+					local Cache = Library.FadeCache[v]
+
+					-- Snapshot the real values the first time we fade out. If a fade is
+					-- already in progress the snapshot is kept, so a half-faded value is
+					-- never mistaken for the real one.
+					if not bool and not Cache then
+						Cache = {}
+						for _, Prop in ipairs(Props) do
+							Cache[Prop] = v[Prop]
+						end
+						Library.FadeCache[v] = Cache
+					end
+
+					if Cache then
+						local Goal = {}
+						for Prop, Real in next, Cache do
+							if Real < 1 then
+								Goal[Prop] = bool and Real or 1
+							end
+						end
+						if next(Goal) then
+							TweenService:Create(v, Info, Goal):Play()
+						end
+					end
+				end
+			end
+
+			task.delay(FadeTime, function()
+				if Library.FadeToken ~= Token then
+					return -- toggled again before this fade finished
+				end
+				if bool then
+					table.clear(Library.FadeCache)
+				else
+					Library.Holder.Visible = false
+				end
+			end)
+
+			task.spawn(function()
+				TweenService:Create(Library.PageHolder, TweenInfo.new(FadeTime, Enum.EasingStyle.Quad, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In), {Position = bool and UDim2.new(0,60,0,0) or UDim2.new(0,0,0,0)}):Play()
+				--
+				if bool then
+					task.wait(0.05)
+				end
+				TweenService:Create(Library.Gradient, TweenInfo.new(FadeTime, Enum.EasingStyle.Quad, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In), {Position = bool and UDim2.new(0.5,0,0,2) or UDim2.new(1,0,0,2)}):Play()
+				TweenService:Create(Library.Gradient, TweenInfo.new(FadeTime, Enum.EasingStyle.Quad, bool and Enum.EasingDirection.Out or Enum.EasingDirection.In), {Size = bool and UDim2.new(0.5,0,0,1) or UDim2.new(0,0,0,1)}):Play()
+			end)
 		end;
+		--
+		-- Is a gui actually on screen (it and every ancestor visible)?
+		local function IsShown(Gui)
+			local Current = Gui
+			while Current and not Current:IsA("LayerCollector") do
+				if Current:IsA("GuiObject") and not Current.Visible then
+					return false
+				end
+				Current = Current.Parent
+			end
+			return Current ~= nil
+		end
+		--
+		-- Is the anchor still inside the visible area of the scrolling frame holding it?
+		local function InViewport(Gui)
+			local Scroller = Gui:FindFirstAncestorWhichIsA("ScrollingFrame")
+			if not Scroller then
+				return true
+			end
+			local Center = Gui.AbsolutePosition.Y + Gui.AbsoluteSize.Y / 2
+			local Top = Scroller.AbsolutePosition.Y
+			return Center >= Top and Center <= Top + Scroller.AbsoluteSize.Y
+		end
+		--
+		-- Dropdown lists and colorpicker windows live inside the element rows, which
+		-- now sit in a ScrollingFrame (that always clips). While open, the popup is
+		-- moved to an overlay layer and kept pinned to its anchor.
+		function Library:RegisterPopup(Popup, Anchor)
+			local Home = Popup.Parent
+			local BasePosition, BaseSize = Popup.Position, Popup.Size
+			local Follow
+
+			local function Place()
+				local Overlay = Library.Overlay
+				local AnchorPos, AnchorSize = Anchor.AbsolutePosition, Anchor.AbsoluteSize
+				local OverlayPos = Overlay.AbsolutePosition
+				Popup.Position = UDim2.fromOffset(
+					AnchorPos.X - OverlayPos.X + BasePosition.X.Scale * AnchorSize.X + BasePosition.X.Offset,
+					AnchorPos.Y - OverlayPos.Y + BasePosition.Y.Scale * AnchorSize.Y + BasePosition.Y.Offset
+				)
+				Popup.Size = UDim2.fromOffset(
+					BaseSize.X.Scale * AnchorSize.X + BaseSize.X.Offset,
+					BaseSize.Y.Scale * AnchorSize.Y + BaseSize.Y.Offset
+				)
+			end
+
+			local function Restore()
+				if Follow then
+					Follow:Disconnect()
+					Follow = nil
+				end
+				if Home and Home.Parent then
+					Popup.Parent = Home
+				end
+				Popup.Position = BasePosition
+				Popup.Size = BaseSize
+			end
+
+			Popup:GetPropertyChangedSignal("Visible"):Connect(function()
+				if not Library.Overlay then
+					return
+				end
+				if Popup.Visible then
+					Place()
+					Popup.Parent = Library.Overlay
+					if not Follow then
+						Follow = RunService.RenderStepped:Connect(function()
+							if not Anchor.Parent or not IsShown(Anchor) or not InViewport(Anchor) then
+								Popup.Visible = false -- fires this handler again -> Restore()
+								return
+							end
+							Place()
+						end)
+					end
+				else
+					Restore()
+				end
+			end)
+
+			Anchor.Destroying:Connect(function()
+				if Follow then
+					Follow:Disconnect()
+					Follow = nil
+				end
+				Popup:Destroy()
+			end)
+
+			table.insert(Library.Popups, Popup)
+		end
+		--
+		function Library:ClosePopups()
+			for _, Popup in next, Library.Popups do
+				if Popup.Parent and Popup.Visible then
+					Popup.Visible = false
+				end
+			end
+		end
 		--
 		function Library:ChangeAccent(Color)
 			Library.Accent = Color
@@ -312,6 +464,8 @@ do
 					theme.BackgroundColor3 = Color
 				elseif theme:IsA("TextLabel") then
 					theme.TextColor3 = Color
+				elseif theme:IsA("ScrollingFrame") then
+					theme.ScrollBarImageColor3 = Color
 				end
 			end
 
@@ -395,6 +549,7 @@ do
 			Hue.ZIndex = 1220
 			--
 			Hue.AutoButtonColor = false
+			Library:RegisterPopup(Window, Icon)
 
 			-- // Connections
 			local mouseover = false
@@ -704,6 +859,14 @@ do
 			--
 			corner1.CornerRadius = UDim.new(0,2)
 			corner2.CornerRadius = UDim.new(0,2)
+			--
+			local Overlay = Instance.new('Frame', ScreenGui)
+			Overlay.Name = "Overlay"
+			Overlay.Size = UDim2.new(1,0,1,0)
+			Overlay.BackgroundTransparency = 1
+			Overlay.BorderSizePixel = 0
+			Overlay.ZIndex = 10
+			Library.Overlay = Overlay
 
 			-- // Dragging
 			Library:Connection(Top.MouseButton1Down, function()
@@ -955,9 +1118,9 @@ do
 			local GradientLine2 = Instance.new('Frame', Bar2)
 			local UIGradient2 = Instance.new('UIGradient', GradientLine2)
 			local RightTitle = Instance.new('TextLabel', Bar2)
-			local LeftContent = Instance.new('Frame', Left)
+			local LeftContent = Instance.new('ScrollingFrame', Left)
 			local LeftUIListLayout = Instance.new('UIListLayout', LeftContent)
-			local RightConnect = Instance.new('Frame', Right)
+			local RightConnect = Instance.new('ScrollingFrame', Right)
 			local RightUIListLayout = Instance.new('UIListLayout', RightConnect)
 			--
 			do -- Inserts
@@ -972,8 +1135,12 @@ do
 				table.insert(Library.Instances, Bar2)
 				table.insert(Library.Instances, GradientLine2)
 				table.insert(Library.Instances, RightTitle)
+				table.insert(Library.Instances, LeftContent)
+				table.insert(Library.Instances, RightConnect)
 				--
 				table.insert(Library.ThemeObjects, Accent)
+				table.insert(Library.ThemeObjects, LeftContent)
+				table.insert(Library.ThemeObjects, RightConnect)
 			end
 			--
 			Button.Name = "Button"
@@ -1139,8 +1306,8 @@ do
 			RightTitle.TextXAlignment = Enum.TextXAlignment.Left
 			--
 			LeftContent.Name = "LeftContent"
-			LeftContent.Position = UDim2.new(0,10,0,30)
-			LeftContent.Size = UDim2.new(1,-20,1,-40)
+			LeftContent.Position = UDim2.new(0,10,0,28)
+			LeftContent.Size = UDim2.new(1,-14,1,-36)
 			LeftContent.BackgroundColor3 = Color3.new(1,1,1)
 			LeftContent.BackgroundTransparency = 1
 			LeftContent.BorderSizePixel = 0
@@ -1149,14 +1316,33 @@ do
 			LeftUIListLayout.Padding = UDim.new(0,4)
 			--
 			RightConnect.Name = "RightConnect"
-			RightConnect.Position = UDim2.new(0,10,0,30)
-			RightConnect.Size = UDim2.new(1,-20,1,-40)
+			RightConnect.Position = UDim2.new(0,10,0,28)
+			RightConnect.Size = UDim2.new(1,-14,1,-36)
 			RightConnect.BackgroundColor3 = Color3.new(1,1,1)
 			RightConnect.BackgroundTransparency = 1
 			RightConnect.BorderSizePixel = 0
 			RightConnect.BorderColor3 = Color3.new(0,0,0)
 			RightUIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 			RightUIListLayout.Padding = UDim.new(0,4)
+			--
+			-- scrolling setup for both columns
+			for _, Column in ipairs({LeftContent, RightConnect}) do
+				Column.ScrollingDirection = Enum.ScrollingDirection.Y
+				Column.CanvasSize = UDim2.new(0,0,0,0)
+				Column.AutomaticCanvasSize = Enum.AutomaticSize.Y
+				Column.ScrollBarThickness = 2
+				Column.ScrollBarImageColor3 = Library.Accent
+				Column.ScrollBarImageTransparency = 0
+				Column.VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar
+				Column.ElasticBehavior = Enum.ElasticBehavior.Never
+				Column.ScrollingEnabled = true
+				-- 2px top/bottom so rows offset by -1px aren't clipped,
+				-- 4px right gap so rows keep their old width beside the bar
+				local Padding = Instance.new('UIPadding', Column)
+				Padding.PaddingTop = UDim.new(0,2)
+				Padding.PaddingBottom = UDim.new(0,2)
+				Padding.PaddingRight = UDim.new(0,4)
+			end
 
 			-- // Connections
 			function Section:Turn(bool)
@@ -1174,7 +1360,7 @@ do
                     end
                     Title.TextColor3 = Color3.fromRGB(78,78,78)
                 end
-                Accent.BackgroundTransparency = Section.Open and 0 or 0.5
+                Library:SetTransparency(Accent, "BackgroundTransparency", Section.Open and 0 or 0.5)
             end;
 
 			Button.MouseButton1Click:Connect(function()
@@ -2034,6 +2220,7 @@ do
 			Gradient2.Rotation = -90
 			--
 			UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+			Library:RegisterPopup(Content, Frame)
 			--
 			Title.Name = "Title"
 			Title.Position = UDim2.new(0,15,0,0)
@@ -2296,6 +2483,7 @@ do
 			Gradient2.Rotation = -90
 			--
 			UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+			Library:RegisterPopup(Content, Frame)
 			--
 			Title.Name = "Title"
 			Title.Position = UDim2.new(0,15,0,0)
