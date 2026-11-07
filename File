@@ -1142,7 +1142,7 @@ do
 			--
 			Main.Name = "Main"
 			Main.Position = UDim2.new(0.5,0,0.5,0)
-			Main.Size = UDim2.new(0,580,0,442)
+			Main.Size = UDim2.new(0,680,0,480)
 			Main.BackgroundColor3 = Library.Theme.Border
 			Main.BorderColor3 = Library.Theme.Outline
 			Main.AnchorPoint = Vector2.new(0.5,0.5)
@@ -1803,6 +1803,7 @@ do
 			-- Holder
 			Holder.Name = "LabelHolder"
 			Holder.Size = UDim2.new(1, 0, 0, Label.Height)
+			Holder.AutomaticSize = Enum.AutomaticSize.Y
 			Holder.BackgroundColor3 = Color3.new(1,1,1)
 			Holder.BackgroundTransparency = 1
 			Holder.BorderSizePixel = 0
@@ -1810,7 +1811,8 @@ do
 			-- Text
 			Text.Name = "Label"
 			Text.Position = UDim2.new(0, 15, 0, 0)   -- aligns with other rows
-			Text.Size = UDim2.new(1, -15, 1, 0)
+			Text.Size = UDim2.new(1, -15, 0, Label.Height)
+			Text.AutomaticSize = Enum.AutomaticSize.Y
 			Text.BackgroundTransparency = 1
 			Text.Text = Label.Text
 			Text.TextColor3 = Label.Color
@@ -1818,8 +1820,8 @@ do
 			Text.TextSize = Library.FontSize
 			Text.TextXAlignment = Label.Align
 			Text.RichText = Label.RichText
-			Text.TextWrapped = false
-			Text.TextTruncate = Enum.TextTruncate.AtEnd
+			Text.TextWrapped = true
+			Text.TextTruncate = Enum.TextTruncate.None
 
 			-- Methods
 			function Label:Set(newText)
