@@ -9,6 +9,25 @@ do
 			configs = "Crimson/Configs";
 		};
 		Accent = Color3.fromRGB(148, 0, 0);
+		-- // Theme: every themed colour in the UI comes from here (see Library:SetTheme)
+		Theme = {
+			Accent = Color3.fromRGB(148, 0, 0),
+			Background = Color3.fromRGB(11, 11, 11),
+			Inline = Color3.fromRGB(8, 8, 8),
+			Border = Color3.fromRGB(28, 28, 28),
+			Element = Color3.fromRGB(20, 20, 20),
+			Section = Color3.fromRGB(38, 38, 38),
+			Text = Color3.fromRGB(255, 255, 255),
+			DimText = Color3.fromRGB(78, 78, 78),
+			Outline = Color3.fromRGB(0, 0, 0),
+		};
+		ThemeRegistry = {};
+		ThemeSeen = setmetatable({}, {__mode = "k"});
+		ThemeGradients = setmetatable({}, {__mode = "k"});
+		AnimatedPickers = {};
+		PickerLoop = nil;
+		CopiedColor = nil;
+		ScreenGui = nil;
 		Pages = {};
 		Sections = {};
 		Flags = {};
@@ -459,6 +478,7 @@ do
 		--
 		function Library:ChangeAccent(Color)
 			Library.Accent = Color
+			Library.Theme.Accent = Color
 
 			for obj, theme in next, Library.ThemeObjects do
 				if theme:IsA("Frame") or theme:IsA("TextButton") then
@@ -470,7 +490,133 @@ do
 				end
 			end
 
-			Library.UIGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0,Color	),ColorSequenceKeypoint.new(1,Color3.new(0.04313725605607033, 0.04313725605607033, 0.04313725605607033)	)}
+			Library.UIGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0,Color	),ColorSequenceKeypoint.new(1,Library.Theme.Background	)}
+		end
+		--
+		local TextClasses = {TextLabel = true, TextButton = true, TextBox = true}
+		local SurfaceRoles = {"Background", "Inline", "Border", "Element", "Section"}
+		local BorderRoles = {"Border", "Outline"}
+		local GradientRoles = {"Border", "Background", "Inline", "Element"}
+		--
+		-- Remembers which theme role each colour property of a UI object uses.
+		function Library:RegisterThemed(Inst)
+			if Library.ThemeSeen[Inst] then
+				return
+			end
+			Library.ThemeSeen[Inst] = true
+			if Inst:IsA("UIGradient") then
+				Library.ThemeGradients[Inst] = true
+				return
+			end
+			if not Inst:IsA("GuiObject") or Inst:GetAttribute("CrimsonNoTheme") then
+				return
+			end
+			local Registry, Theme = Library.ThemeRegistry, Library.Theme
+			for _, Role in ipairs(SurfaceRoles) do
+				if Inst.BackgroundColor3 == Theme[Role] then
+					Registry[#Registry + 1] = {Inst, "BackgroundColor3", Role}
+					break
+				end
+			end
+			for _, Role in ipairs(BorderRoles) do
+				if Inst.BorderColor3 == Theme[Role] then
+					Registry[#Registry + 1] = {Inst, "BorderColor3", Role}
+					break
+				end
+			end
+			if TextClasses[Inst.ClassName] then
+				-- text flips between Text and DimText at runtime, so it is resolved when the theme changes
+				Registry[#Registry + 1] = {Inst, "TextColor3", "Dynamic"}
+				if Inst:IsA("TextBox") and Inst.PlaceholderColor3 == Theme.DimText then
+					Registry[#Registry + 1] = {Inst, "PlaceholderColor3", "DimText"}
+				end
+			end
+		end
+		--
+		-- Library:SetTheme({Background = Color3, Text = Color3, ...}) recolours the whole UI.
+		function Library:SetTheme(Changes)
+			local Old = table.clone(Library.Theme)
+			for Role, Value in next, Changes do
+				if Role == "Accent" then
+					Library:ChangeAccent(Value)
+				elseif Old[Role] ~= nil and typeof(Value) == "Color3" then
+					Library.Theme[Role] = Value
+				end
+			end
+			local Theme, Alive = Library.Theme, {}
+			for _, Entry in ipairs(Library.ThemeRegistry) do
+				local Inst, Property, Role = Entry[1], Entry[2], Entry[3]
+				if Inst.Parent then
+					Alive[#Alive + 1] = Entry
+					if Role == "Dynamic" then
+						local Current = Inst[Property]
+						if Current == Old.Text then
+							Inst[Property] = Theme.Text
+						elseif Current == Old.DimText then
+							Inst[Property] = Theme.DimText
+						end
+					elseif Old[Role] ~= Theme[Role] then
+						Inst[Property] = Theme[Role]
+					end
+				end
+			end
+			Library.ThemeRegistry = Alive
+			for Gradient in next, Library.ThemeGradients do
+				if Gradient.Parent then
+					local Keypoints, Changed = {}, false
+					for Index, Keypoint in ipairs(Gradient.Color.Keypoints) do
+						local Value = Keypoint.Value
+						for _, Role in ipairs(GradientRoles) do
+							if Value == Old[Role] and Old[Role] ~= Theme[Role] then
+								Value = Theme[Role]
+								Changed = true
+								break
+							end
+						end
+						Keypoints[Index] = ColorSequenceKeypoint.new(Keypoint.Time, Value)
+					end
+					if Changed then
+						Gradient.Color = ColorSequence.new(Keypoints)
+					end
+				end
+			end
+		end
+		--
+		function Library:SetFont(NewFont)
+			local OldFamily = Library.UIFont.Family
+			Library.UIFont = NewFont
+			if not Library.ScreenGui then
+				return
+			end
+			for _, Inst in ipairs(Library.ScreenGui:GetDescendants()) do
+				if TextClasses[Inst.ClassName] and Inst.FontFace.Family == OldFamily then
+					Inst.FontFace = NewFont
+				end
+			end
+			task.defer(function()
+				for _, Inst in ipairs(Library.ScreenGui:GetDescendants()) do
+					if Inst.Name == "Page" and Inst:IsA("TextButton") and Inst:FindFirstChild("Title") then
+						Inst.Size = UDim2.new(0, Inst.Title.TextBounds.X + 16, 1, 0)
+					end
+				end
+			end)
+		end
+		--
+		-- One loop drives every colour picker that has Rainbow / Glow / Pulse on.
+		function Library:StartPickerLoop()
+			if Library.PickerLoop then
+				return
+			end
+			Library.PickerLoop = game:GetService("RunService").RenderStepped:Connect(function()
+				local Now = tick()
+				for Output in next, Library.AnimatedPickers do
+					local Ok, Error = pcall(Output, Now)
+					if not Ok then
+						Library.AnimatedPickers[Output] = nil
+						warn("[Crimson UI] colour effect stopped: " .. tostring(Error))
+					end
+				end
+			end)
 		end
 		--
 		function Library:IsMouseOverFrame(Frame)
@@ -504,10 +650,13 @@ do
 			end
 			--
 			Icon.Name = "Icon"
+			Icon:SetAttribute("CrimsonNoTheme", true)
+			Sat:SetAttribute("CrimsonNoTheme", true)
+			Hue:SetAttribute("CrimsonNoTheme", true)
 			Icon.Position = UDim2.new(1, -30 - (count * 15) - (count * 6),0,4)
 			Icon.Size = UDim2.new(0,15,0,6)
 			Icon.BackgroundColor3 = default
-			Icon.BorderColor3 = Color3.new(0,0,0)
+			Icon.BorderColor3 = Library.Theme.Outline
 			Icon.AutoButtonColor = false
 			Icon.Text = ""
 			--
@@ -527,8 +676,8 @@ do
 			Window.Name = "Window"
 			Window.Position = UDim2.new(0,-120,0,10)
 			Window.Size = UDim2.new(0,150,0,133)
-			Window.BackgroundColor3 = Color3.new(0.0431,0.0431,0.0431)
-			Window.BorderColor3 = Color3.new(0.1098,0.1098,0.1098)
+			Window.BackgroundColor3 = Library.Theme.Background
+			Window.BorderColor3 = Library.Theme.Border
 			Window.ZIndex = 1220
 			Window.Visible = false
 			--
@@ -536,7 +685,7 @@ do
 			Sat.Position = UDim2.new(0,5,0,5)
 			Sat.Size = UDim2.new(0,123,0,123)
 			Sat.BackgroundColor3 = default
-			Sat.BorderColor3 = Color3.new(0.1098,0.1098,0.1098)
+			Sat.BorderColor3 = Library.Theme.Border
 			Sat.Image = "http://www.roblox.com/asset/?id=13882904626"
 			Sat.AutoButtonColor = false
 			Sat.ZIndex = 1220
@@ -545,7 +694,7 @@ do
 			Hue.Position = UDim2.new(1,-15,0,5)
 			Hue.Size = UDim2.new(0,10,0,123)
 			Hue.BackgroundColor3 = Color3.new(1,1,1)
-			Hue.BorderColor3 = Color3.new(0.1098,0.1098,0.1098)
+			Hue.BorderColor3 = Library.Theme.Border
 			Hue.Image = "http://www.roblox.com/asset/?id=13882976736"
 			Hue.ZIndex = 1220
 			--
@@ -559,6 +708,7 @@ do
 			local alpha = defaultalpha
 			local oldcolor = hsv
 
+			local OnPickerSet
 			local function set(color, a, nopos, setcolor)
 				if type(color) == "table" then
 					a = color[4]
@@ -589,6 +739,9 @@ do
 					end
 
 					callback(Library:RGBA(hsv.r * 255, hsv.g * 255, hsv.b * 255, alpha))
+					if OnPickerSet then
+						OnPickerSet()
+					end
 				end
 			end
 
@@ -665,6 +818,236 @@ do
 				end
 			end)
 
+			-- // Effects panel (left of the picker)
+			local Effects = Instance.new('Frame', Window)
+			Effects.Name = "Effects"
+			Effects.Position = UDim2.new(0,-112,0,0)
+			Effects.Size = UDim2.new(0,108,1,0)
+			Effects.BackgroundColor3 = Library.Theme.Background
+			Effects.BorderColor3 = Library.Theme.Border
+			Effects.ZIndex = 1220
+			table.insert(Library.Instances, Effects)
+
+			local function EffectText(Class, Parent, Text, Position, Size, ZIndex)
+				local Object = Instance.new(Class, Parent)
+				Object.BackgroundTransparency = 1
+				Object.BorderSizePixel = 0
+				Object.Position = Position
+				Object.Size = Size
+				Object.Text = Text
+				Object.TextColor3 = Library.Theme.DimText
+				Object.FontFace = Library.UIFont
+				Object.TextSize = Library.FontSize
+				Object.TextXAlignment = Enum.TextXAlignment.Left
+				Object.ZIndex = ZIndex or 1221
+				table.insert(Library.Instances, Object)
+				return Object
+			end
+
+			EffectText('TextLabel', Effects, "Effects", UDim2.new(0,5,0,3), UDim2.new(1,-10,0,12))
+
+			local Rainbow, Glow, Pulse, Speed = false, false, false, 1
+
+			local function Output(Now)
+				local Colour = hsv
+				if Rainbow then
+					Colour = Color3.fromHSV((Now * 0.15 * Speed) % 1, sat > 0.05 and sat or 1, val > 0.05 and val or 1)
+				end
+				if Glow then
+					Colour = Colour:Lerp(Color3.new(1, 1, 1), 0.45 * (math.sin(Now * 3 * Speed) + 1) / 2)
+				end
+				if Pulse then
+					Colour = Colour:Lerp(Color3.new(0, 0, 0), 0.6 * (math.sin(Now * 3 * Speed) + 1) / 2)
+				end
+				Icon.BackgroundColor3 = Colour
+				callback(Colour)
+			end
+
+			local function RefreshEffects()
+				if Rainbow or Glow or Pulse then
+					Library.AnimatedPickers[Output] = true
+					Library:StartPickerLoop()
+				elseif Library.AnimatedPickers[Output] then
+					Library.AnimatedPickers[Output] = nil
+					Icon.BackgroundColor3 = hsv
+					callback(hsv)
+				end
+			end
+
+			local function EffectToggle(Text, Y, OnChange)
+				local Button = Instance.new('TextButton', Effects)
+				Button.BackgroundTransparency = 1
+				Button.BorderSizePixel = 0
+				Button.Position = UDim2.new(0,5,0,Y)
+				Button.Size = UDim2.new(1,-10,0,12)
+				Button.Text = ""
+				Button.AutoButtonColor = false
+				Button.ZIndex = 1221
+				local Box = Instance.new('Frame', Button)
+				Box.Position = UDim2.new(0,0,0,3)
+				Box.Size = UDim2.new(0,6,0,6)
+				Box.BackgroundColor3 = Library.Theme.Element
+				Box.BorderColor3 = Library.Theme.Outline
+				Box.ZIndex = 1222
+				local Fill = Instance.new('Frame', Box)
+				Fill.Size = UDim2.new(1,0,1,0)
+				Fill.BackgroundColor3 = Library.Accent
+				Fill.BorderSizePixel = 0
+				Fill.Visible = false
+				Fill.ZIndex = 1223
+				table.insert(Library.Instances, Box)
+				table.insert(Library.Instances, Fill)
+				table.insert(Library.ThemeObjects, Fill)
+				local Label = EffectText('TextLabel', Button, Text, UDim2.new(0,12,0,0), UDim2.new(1,-12,1,0), 1222)
+				local State = false
+				local function Set(Value)
+					State = Value == true
+					Fill.Visible = State
+					Label.TextColor3 = State and Library.Theme.Text or Library.Theme.DimText
+					OnChange(State)
+				end
+				Button.MouseButton1Click:Connect(function()
+					Set(not State)
+				end)
+				return Set
+			end
+
+			local SetRainbow = EffectToggle("Rainbow", 19, function(v)
+				Rainbow = v
+				Library.Flags[flag .. "_rainbow"] = v
+				RefreshEffects()
+			end)
+			local SetGlow = EffectToggle("Glow", 33, function(v)
+				Glow = v
+				Library.Flags[flag .. "_glow"] = v
+				RefreshEffects()
+			end)
+			local SetPulse = EffectToggle("Pulse", 47, function(v)
+				Pulse = v
+				Library.Flags[flag .. "_pulse"] = v
+				RefreshEffects()
+			end)
+
+			local SpeedLabel = EffectText('TextLabel', Effects, "Speed: 1.0x", UDim2.new(0,5,0,61), UDim2.new(1,-10,0,12))
+			local SpeedBar = Instance.new('TextButton', Effects)
+			SpeedBar.Position = UDim2.new(0,5,0,75)
+			SpeedBar.Size = UDim2.new(1,-10,0,6)
+			SpeedBar.BackgroundColor3 = Library.Theme.Element
+			SpeedBar.BorderColor3 = Library.Theme.Outline
+			SpeedBar.AutoButtonColor = false
+			SpeedBar.Text = ""
+			SpeedBar.ZIndex = 1221
+			local SpeedFill = Instance.new('Frame', SpeedBar)
+			SpeedFill.BackgroundColor3 = Library.Accent
+			SpeedFill.BorderSizePixel = 0
+			SpeedFill.ZIndex = 1222
+			table.insert(Library.Instances, SpeedBar)
+			table.insert(Library.Instances, SpeedFill)
+			table.insert(Library.ThemeObjects, SpeedFill)
+
+			local function SetSpeed(Value)
+				Speed = math.clamp(tonumber(Value) or 1, 0.1, 3)
+				Speed = math.floor(Speed * 10 + 0.5) / 10
+				SpeedFill.Size = UDim2.new((Speed - 0.1) / 2.9, 0, 1, 0)
+				SpeedLabel.Text = string.format("Speed: %.1fx", Speed)
+				Library.Flags[flag .. "_speed"] = Speed
+			end
+			SetSpeed(1)
+
+			local SlidingSpeed = false
+			local function SlideSpeed(Input)
+				local Fraction = math.clamp((Input.Position.X - SpeedBar.AbsolutePosition.X) / SpeedBar.AbsoluteSize.X, 0, 1)
+				SetSpeed(0.1 + Fraction * 2.9)
+			end
+			SpeedBar.InputBegan:Connect(function(Input)
+				if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+					SlidingSpeed = true
+					SlideSpeed(Input)
+				end
+			end)
+			SpeedBar.InputEnded:Connect(function(Input)
+				if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+					SlidingSpeed = false
+				end
+			end)
+			Library:Connection(game:GetService("UserInputService").InputChanged, function(Input)
+				if SlidingSpeed and Input.UserInputType == Enum.UserInputType.MouseMovement then
+					SlideSpeed(Input)
+				end
+			end)
+
+			local HexHolder = Instance.new('Frame', Effects)
+			HexHolder.Position = UDim2.new(0,5,0,87)
+			HexHolder.Size = UDim2.new(1,-10,0,14)
+			HexHolder.BackgroundColor3 = Library.Theme.Element
+			HexHolder.BorderColor3 = Library.Theme.Outline
+			HexHolder.ZIndex = 1221
+			table.insert(Library.Instances, HexHolder)
+			local HexBox = EffectText('TextBox', HexHolder, "#" .. hsv:ToHex(), UDim2.new(0,3,0,0), UDim2.new(1,-6,1,0), 1222)
+			HexBox.ClearTextOnFocus = false
+			HexBox.PlaceholderText = "#hex"
+			HexBox.PlaceholderColor3 = Library.Theme.DimText
+
+			local function ApplyPicked(Colour)
+				set(Colour, alpha, false, true)
+				curhuesizey = (Colour:ToHSV())
+			end
+
+			OnPickerSet = function()
+				if not HexBox:IsFocused() then
+					HexBox.Text = "#" .. hsv:ToHex()
+				end
+			end
+
+			HexBox.FocusLost:Connect(function()
+				local Hex = string.gsub(HexBox.Text, "[^%x]", "")
+				if #Hex == 6 then
+					local Ok, Colour = pcall(Color3.fromHex, Hex)
+					if Ok and Colour then
+						ApplyPicked(Colour)
+					end
+				end
+				HexBox.Text = "#" .. hsv:ToHex()
+			end)
+
+			local function EffectButton(Text, Position)
+				local Holder = Instance.new('Frame', Effects)
+				Holder.Position = Position
+				Holder.Size = UDim2.new(0.5,-7,0,14)
+				Holder.BackgroundColor3 = Library.Theme.Element
+				Holder.BorderColor3 = Library.Theme.Outline
+				Holder.ZIndex = 1221
+				table.insert(Library.Instances, Holder)
+				local Button = EffectText('TextButton', Holder, Text, UDim2.new(0,0,0,0), UDim2.new(1,0,1,0), 1222)
+				Button.TextXAlignment = Enum.TextXAlignment.Center
+				Button.AutoButtonColor = false
+				Button.MouseButton1Down:Connect(function()
+					Button.TextColor3 = Library.Theme.Text
+				end)
+				Button.MouseButton1Up:Connect(function()
+					Button.TextColor3 = Library.Theme.DimText
+				end)
+				return Button
+			end
+
+			EffectButton("Copy", UDim2.new(0,5,0,106)).MouseButton1Click:Connect(function()
+				Library.CopiedColor = hsv
+				pcall(setclipboard, "#" .. hsv:ToHex())
+			end)
+			EffectButton("Paste", UDim2.new(0.5,2,0,106)).MouseButton1Click:Connect(function()
+				if Library.CopiedColor then
+					ApplyPicked(Library.CopiedColor)
+				end
+			end)
+
+			Library.Flags[flag .. "_rainbow"] = false
+			Library.Flags[flag .. "_glow"] = false
+			Library.Flags[flag .. "_pulse"] = false
+			Flags[flag .. "_rainbow"] = SetRainbow
+			Flags[flag .. "_glow"] = SetGlow
+			Flags[flag .. "_pulse"] = SetPulse
+			Flags[flag .. "_speed"] = SetSpeed
+
 			Icon.MouseButton1Click:Connect(function()
 				Window.Visible = not Window.Visible
 
@@ -685,7 +1068,7 @@ do
 
 			Library:Connection(game:GetService("UserInputService").InputBegan, function(Input)
 				if Window.Visible and Input.UserInputType == Enum.UserInputType.MouseButton1 then
-					if not Library:IsMouseOverFrame(Window) and not Library:IsMouseOverFrame(Icon) then
+					if not Library:IsMouseOverFrame(Window) and not Library:IsMouseOverFrame(Icon) and not Library:IsMouseOverFrame(Effects) then
 						Window.Visible = false
 					end
 				end
@@ -712,6 +1095,15 @@ do
 			-- // Instances
 			local ScreenGui = Instance.new('ScreenGui', game:GetService("RunService"):IsStudio() and game.Players.LocalPlayer.PlayerGui or game.CoreGui)
 			ScreenGui.Name = "Crimson"
+			Library.ScreenGui = ScreenGui
+			ScreenGui.DescendantAdded:Connect(function(Descendant)
+				-- deferred so the creating code has finished setting the colours
+				task.defer(function()
+					if Descendant.Parent then
+						Library:RegisterThemed(Descendant)
+					end
+				end)
+			end)
 			local Main = Instance.new('Frame', ScreenGui)
 			local Inline = Instance.new('Frame', Main)
 			local Middle = Instance.new('Frame', Inline)
@@ -751,46 +1143,46 @@ do
 			Main.Name = "Main"
 			Main.Position = UDim2.new(0.5,0,0.5,0)
 			Main.Size = UDim2.new(0,580,0,442)
-			Main.BackgroundColor3 = Color3.new(0.1098,0.1098,0.1098)
-			Main.BorderColor3 = Color3.new(0,0,0)
+			Main.BackgroundColor3 = Library.Theme.Border
+			Main.BorderColor3 = Library.Theme.Outline
 			Main.AnchorPoint = Vector2.new(0.5,0.5)
 			Library.Holder = Main
 			--
 			Inline.Name = "Inline"
 			Inline.Position = UDim2.new(0,2,0,2)
 			Inline.Size = UDim2.new(1,-4,1,-4)
-			Inline.BackgroundColor3 = Color3.new(0.0314,0.0314,0.0314)
-			Inline.BorderColor3 = Color3.new(0,0,0)
+			Inline.BackgroundColor3 = Library.Theme.Inline
+			Inline.BorderColor3 = Library.Theme.Outline
 			--
 			Middle.Name = "Middle"
 			Middle.Position = UDim2.new(0,-1,0,22)
 			Middle.Size = UDim2.new(1,2,1,-44)
-			Middle.BackgroundColor3 = Color3.new(0.0431,0.0431,0.0431)
-			Middle.BorderColor3 = Color3.new(0,0,0)
+			Middle.BackgroundColor3 = Library.Theme.Background
+			Middle.BorderColor3 = Library.Theme.Outline
 			Middle.BorderMode = Enum.BorderMode.Inset
 			--
 			Line.Name = "Line"
 			Line.Position = UDim2.new(0,-1,0,0)
 			Line.Size = UDim2.new(1,2,0,1)
-			Line.BackgroundColor3 = Color3.new(0.1098,0.1098,0.1098)
+			Line.BackgroundColor3 = Library.Theme.Border
 			Line.BorderSizePixel = 0
-			Line.BorderColor3 = Color3.new(0,0,0)
+			Line.BorderColor3 = Library.Theme.Outline
 			--
 			Line2.Name = "Line2"
 			Line2.Position = UDim2.new(0,-1,1,-1)
 			Line2.Size = UDim2.new(1,2,0,1)
-			Line2.BackgroundColor3 = Color3.new(0.1098,0.1098,0.1098)
+			Line2.BackgroundColor3 = Library.Theme.Border
 			Line2.BorderSizePixel = 0
-			Line2.BorderColor3 = Color3.new(0,0,0)
+			Line2.BorderColor3 = Library.Theme.Outline
 			--
 			Gradient.Name = "Gradient"
 			Gradient.Position = UDim2.new(0.5,0,0,2)
 			Gradient.Size = UDim2.new(0.5,0,0,1)
 			Gradient.BackgroundColor3 = Color3.new(1,1,1)
 			Gradient.BorderSizePixel = 0
-			Gradient.BorderColor3 = Color3.new(0,0,0)
+			Gradient.BorderColor3 = Library.Theme.Outline
 			Library.Gradient = Gradient
-			UIGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0,Library.Accent	),ColorSequenceKeypoint.new(1,Color3.new(0.04313725605607033, 0.04313725605607033, 0.04313725605607033)	)}
+			UIGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0,Library.Accent	),ColorSequenceKeypoint.new(1,Library.Theme.Background	)}
 			UIGradient.Rotation = 180
 			Library.UIGradient = UIGradient
 			--
@@ -799,7 +1191,7 @@ do
 			Top.BackgroundColor3 = Color3.new(1,1,1)
 			Top.BackgroundTransparency = 1
 			Top.BorderSizePixel = 0
-			Top.BorderColor3 = Color3.new(0,0,0)
+			Top.BorderColor3 = Library.Theme.Outline
 			Top.AutoButtonColor = false
 			Top.Text = ""
 			--
@@ -809,7 +1201,7 @@ do
 			Title.BackgroundColor3 = Color3.new(1,1,1)
 			Title.BackgroundTransparency = 1
 			Title.BorderSizePixel = 0
-			Title.BorderColor3 = Color3.new(0,0,0)
+			Title.BorderColor3 = Library.Theme.Outline
 			Title.Text = Base.Title
 			Title.TextColor3 = Library.Accent
 			Title.FontFace = Library.UIFont
@@ -823,13 +1215,13 @@ do
 			Bottom.BackgroundColor3 = Color3.new(1,1,1)
 			Bottom.BackgroundTransparency = 1
 			Bottom.BorderSizePixel = 0
-			Bottom.BorderColor3 = Color3.new(0,0,0)
+			Bottom.BorderColor3 = Library.Theme.Outline
 			--
 			Sections.Name = "Sections"
 			Sections.Position = UDim2.new(0,10,0,13)
 			Sections.Size = UDim2.new(0,110,1,-26)
-			Sections.BackgroundColor3 = Color3.new(0.0314,0.0314,0.0314)
-			Sections.BorderColor3 = Color3.new(0.1098,0.1098,0.1098)
+			Sections.BackgroundColor3 = Library.Theme.Inline
+			Sections.BorderColor3 = Library.Theme.Border
 			--
 			Pages.Name = "Pages"
 			Pages.Position = UDim2.new(0,60,0,0)
@@ -837,7 +1229,7 @@ do
 			Pages.BackgroundColor3 = Color3.new(1,1,1)
 			Pages.BackgroundTransparency = 1
 			Pages.BorderSizePixel = 0
-			Pages.BorderColor3 = Color3.new(0,0,0)
+			Pages.BorderColor3 = Library.Theme.Outline
 			Pages.ZIndex = 52
 			Library.PageHolder = Pages
 			UIListLayout.FillDirection = Enum.FillDirection.Horizontal
@@ -850,7 +1242,7 @@ do
 			version.BackgroundColor3 = Color3.new(1,1,1)
 			version.BackgroundTransparency = 1
 			version.BorderSizePixel = 0
-			version.BorderColor3 = Color3.new(0,0,0)
+			version.BorderColor3 = Library.Theme.Outline
 			version.Text = "<font color=\"#4e4e4e\">version: </font> " .. (LRM_ScriptVersion or "source")
 			version.TextColor3 = Library.Accent
 			version.FontFace = Library.UIFont
@@ -943,7 +1335,7 @@ do
 			Holder.BackgroundColor3 = Color3.new(1,1,1)
 			Holder.BackgroundTransparency = 1
 			Holder.BorderSizePixel = 0
-			Holder.BorderColor3 = Color3.new(0,0,0)
+			Holder.BorderColor3 = Library.Theme.Outline
 			Holder.Text = ""
 			Holder.TextColor3 = Color3.new(0,0,0)
 			Holder.AutoButtonColor = false
@@ -954,8 +1346,8 @@ do
 			Button.Name = "Button"
 			Button.Position = UDim2.new(0,0,0,3)
 			Button.Size = UDim2.new(1,0,1,-2)
-			Button.BackgroundColor3 = Color3.new(0.0431,0.0431,0.0431)
-			Button.BorderColor3 = Color3.new(0.1098,0.1098,0.1098)
+			Button.BackgroundColor3 = Library.Theme.Background
+			Button.BorderColor3 = Library.Theme.Border
 			Button.ZIndex = 53
 			Button.Visible = false
 			--
@@ -964,15 +1356,15 @@ do
 			TopLine.Size = UDim2.new(1,-5,0,1)
 			TopLine.BackgroundColor3 = Library.Accent
 			TopLine.BorderSizePixel = 0
-			TopLine.BorderColor3 = Color3.new(0,0,0)
+			TopLine.BorderColor3 = Library.Theme.Outline
 			TopLine.ZIndex = 53
 			--
 			Line.Name = "Line"
 			Line.Position = UDim2.new(0,0,1,0)
 			Line.Size = UDim2.new(1,0,0,1)
-			Line.BackgroundColor3 = Color3.new(0.0431,0.0431,0.0431)
+			Line.BackgroundColor3 = Library.Theme.Background
 			Line.BorderSizePixel = 0
-			Line.BorderColor3 = Color3.new(0,0,0)
+			Line.BorderColor3 = Library.Theme.Outline
 			Line.ZIndex = 53
 			--
 			Left.Name = "Left"
@@ -980,7 +1372,7 @@ do
 			Left.Size = UDim2.new(0,5,0,1)
 			Left.BackgroundColor3 = Library.Accent
 			Left.BorderSizePixel = 0
-			Left.BorderColor3 = Color3.new(0,0,0)
+			Left.BorderColor3 = Library.Theme.Outline
 			Left.Rotation = -45
 			Left.ZIndex = 53
 			--
@@ -989,25 +1381,25 @@ do
 			RIght.Size = UDim2.new(0,5,0,1)
 			RIght.BackgroundColor3 = Library.Accent
 			RIght.BorderSizePixel = 0
-			RIght.BorderColor3 = Color3.new(0,0,0)
+			RIght.BorderColor3 = Library.Theme.Outline
 			RIght.Rotation = 45
 			RIght.ZIndex = 53
 			--
 			Black.Name = "Black"
 			Black.Position = UDim2.new(0,-5,0,-2)
 			Black.Size = UDim2.new(0,7,0,6)
-			Black.BackgroundColor3 = Color3.new(0.0314,0.0314,0.0314)
+			Black.BackgroundColor3 = Library.Theme.Inline
 			Black.BorderSizePixel = 0
-			Black.BorderColor3 = Color3.new(0,0,0)
+			Black.BorderColor3 = Library.Theme.Outline
 			Black.Rotation = -45
 			Black.ZIndex = 55
 			--
 			Black2.Name = "Black2"
 			Black2.Position = UDim2.new(1,-2,0,-2)
 			Black2.Size = UDim2.new(0,7,0,6)
-			Black2.BackgroundColor3 = Color3.new(0.0314,0.0314,0.0314)
+			Black2.BackgroundColor3 = Library.Theme.Inline
 			Black2.BorderSizePixel = 0
-			Black2.BorderColor3 = Color3.new(0,0,0)
+			Black2.BorderColor3 = Library.Theme.Outline
 			Black2.Rotation = 45
 			Black2.ZIndex = 55
 			--
@@ -1017,9 +1409,9 @@ do
 			Title.BackgroundColor3 = Color3.new(1,1,1)
 			Title.BackgroundTransparency = 1
 			Title.BorderSizePixel = 0
-			Title.BorderColor3 = Color3.new(0,0,0)
+			Title.BorderColor3 = Library.Theme.Outline
 			Title.Text = Page.Title
-			Title.TextColor3 = Color3.fromRGB(78, 78, 78)
+			Title.TextColor3 = Library.Theme.DimText
 			Title.FontFace = Library.UIFont
 			Title.TextSize = Library.FontSize
 			Title.ZIndex = 53
@@ -1031,7 +1423,7 @@ do
 			PageSections.BackgroundColor3 = Color3.new(1,1,1)
 			PageSections.BackgroundTransparency = 1
 			PageSections.BorderSizePixel = 0
-			PageSections.BorderColor3 = Color3.new(0,0,0)
+			PageSections.BorderColor3 = Library.Theme.Outline
 			PageSections.Visible = false
 			UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 			UIListLayout.Padding = UDim.new(0,3)
@@ -1042,7 +1434,7 @@ do
 			SectionHolder.BackgroundColor3 = Color3.new(1,1,1)
 			SectionHolder.BackgroundTransparency = 1
 			SectionHolder.BorderSizePixel = 0
-			SectionHolder.BorderColor3 = Color3.new(0,0,0)
+			SectionHolder.BorderColor3 = Library.Theme.Outline
 			SectionHolder.ZIndex = 53
 			SectionHolder.Visible = false
 			--
@@ -1057,7 +1449,7 @@ do
 					Title.TextColor3 = Library.Accent
 				else
 					table.remove(Library.ThemeObjects, table.find(Library.ThemeObjects, Title))
-					Title.TextColor3 = Color3.fromRGB(78,78,78)
+					Title.TextColor3 = Library.Theme.DimText
 				end
 				SectionHolder.Visible = Page.Open
 			end;
@@ -1162,7 +1554,7 @@ do
 			--
 			Frame.Position = UDim2.new(0,1,0,0)
 			Frame.Size = UDim2.new(1,-2,1,0)
-			Frame.BackgroundColor3 = Color3.new(0.149,0.149,0.149)
+			Frame.BackgroundColor3 = Library.Theme.Section
 			Frame.BorderSizePixel = 0
 			Frame.ZIndex = 54
 			--
@@ -1176,7 +1568,7 @@ do
 			Title.BackgroundColor3 = Color3.new(0.298,0.6353,0.9882)
 			Title.BackgroundTransparency = 1
 			Title.Text = Options.Name
-			Title.TextColor3 = Color3.fromRGB(78,78,78)
+			Title.TextColor3 = Library.Theme.DimText
 			Title.FontFace = Library.UIFont
 			Title.TextSize = Library.FontSize
 			Title.ZIndex = 54
@@ -1187,19 +1579,19 @@ do
 			NewSection.BackgroundColor3 = Color3.new(1,1,1)
 			NewSection.BackgroundTransparency = 1
 			NewSection.BorderSizePixel = 0
-			NewSection.BorderColor3 = Color3.new(0,0,0)
+			NewSection.BorderColor3 = Library.Theme.Outline
 			NewSection.Visible = false
 			--
 			Left.Name = "Left"
 			Left.Position = UDim2.new(0,2,0,0)
 			Left.Size = UDim2.new(0.5,-10,1,0)
-			Left.BackgroundColor3 = Color3.new(0.0314,0.0314,0.0314)
-			Left.BorderColor3 = Color3.new(0.1098,0.1098,0.1098)
+			Left.BackgroundColor3 = Library.Theme.Inline
+			Left.BorderColor3 = Library.Theme.Border
 			--
 			Bar.Name = "Bar"
 			Bar.Size = UDim2.new(1,0,0,20)
-			Bar.BackgroundColor3 = Color3.new(0.0431,0.0431,0.0431)
-			Bar.BorderColor3 = Color3.new(0.1098,0.1098,0.1098)
+			Bar.BackgroundColor3 = Library.Theme.Background
+			Bar.BorderColor3 = Library.Theme.Border
 			--
 			Gradient.Name = "Gradient"
 			Gradient.Color = ColorSequence.new{
@@ -1219,19 +1611,19 @@ do
 			GradientLine.Size = UDim2.new(1,0,0,1)
 			GradientLine.BackgroundColor3 = Color3.new(1,1,1)
 			GradientLine.BorderSizePixel = 0
-			GradientLine.BorderColor3 = Color3.new(0,0,0)
+			GradientLine.BorderColor3 = Library.Theme.Outline
 			UIGradient3.Color = ColorSequence.new{
 				ColorSequenceKeypoint.new(
 					0,
-					Color3.new(0.10980392247438431, 0.10980392247438431, 0.10980392247438431)	
+					Library.Theme.Border	
 				),
 				ColorSequenceKeypoint.new(
 					0.4826989769935608,
-					Color3.new(0.04313725605607033, 0.04313725605607033, 0.04313725605607033)	
+					Library.Theme.Background	
 				),
 				ColorSequenceKeypoint.new(
 					1,
-					Color3.new(0.10980392247438431, 0.10980392247438431, 0.10980392247438431)	
+					Library.Theme.Border	
 				)
 			}
 			--
@@ -1241,9 +1633,9 @@ do
 			LeftTitle.BackgroundColor3 = Color3.new(1,1,1)
 			LeftTitle.BackgroundTransparency = 1
 			LeftTitle.BorderSizePixel = 0
-			LeftTitle.BorderColor3 = Color3.new(0,0,0)
+			LeftTitle.BorderColor3 = Library.Theme.Outline
 			LeftTitle.Text = Section.LeftName
-			LeftTitle.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			LeftTitle.TextColor3 = Library.Theme.DimText
 			LeftTitle.FontFace = Library.UIFont
 			LeftTitle.TextSize = Library.FontSize
 			LeftTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -1251,13 +1643,13 @@ do
 			Right.Name = "Right"
 			Right.Position = UDim2.new(0.5,8,0,0)
 			Right.Size = UDim2.new(0.5,-10,1,0)
-			Right.BackgroundColor3 = Color3.new(0.0314,0.0314,0.0314)
-			Right.BorderColor3 = Color3.new(0.1098,0.1098,0.1098)
+			Right.BackgroundColor3 = Library.Theme.Inline
+			Right.BorderColor3 = Library.Theme.Border
 			--
 			Bar2.Name = "Bar2"
 			Bar2.Size = UDim2.new(1,0,0,20)
-			Bar2.BackgroundColor3 = Color3.new(0.0431,0.0431,0.0431)
-			Bar2.BorderColor3 = Color3.new(0.1098,0.1098,0.1098)
+			Bar2.BackgroundColor3 = Library.Theme.Background
+			Bar2.BorderColor3 = Library.Theme.Border
 			--
 			Gradient2.Name = "Gradient2"
 			Gradient2.Color = ColorSequence.new{
@@ -1277,19 +1669,19 @@ do
 			GradientLine2.Size = UDim2.new(1,0,0,1)
 			GradientLine2.BackgroundColor3 = Color3.new(1,1,1)
 			GradientLine2.BorderSizePixel = 0
-			GradientLine2.BorderColor3 = Color3.new(0,0,0)
+			GradientLine2.BorderColor3 = Library.Theme.Outline
 			UIGradient2.Color = ColorSequence.new{
 				ColorSequenceKeypoint.new(
 					0,
-					Color3.new(0.10980392247438431, 0.10980392247438431, 0.10980392247438431)	
+					Library.Theme.Border	
 				),
 				ColorSequenceKeypoint.new(
 					0.4826989769935608,
-					Color3.new(0.04313725605607033, 0.04313725605607033, 0.04313725605607033)	
+					Library.Theme.Background	
 				),
 				ColorSequenceKeypoint.new(
 					1,
-					Color3.new(0.10980392247438431, 0.10980392247438431, 0.10980392247438431)	
+					Library.Theme.Border	
 				)
 			}
 			--
@@ -1299,9 +1691,9 @@ do
 			RightTitle.BackgroundColor3 = Color3.new(1,1,1)
 			RightTitle.BackgroundTransparency = 1
 			RightTitle.BorderSizePixel = 0
-			RightTitle.BorderColor3 = Color3.new(0,0,0)
+			RightTitle.BorderColor3 = Library.Theme.Outline
 			RightTitle.Text = Section.RightName
-			RightTitle.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			RightTitle.TextColor3 = Library.Theme.DimText
 			RightTitle.FontFace = Library.UIFont
 			RightTitle.TextSize = Library.FontSize
 			RightTitle.TextXAlignment = Enum.TextXAlignment.Left
@@ -1312,7 +1704,7 @@ do
 			LeftContent.BackgroundColor3 = Color3.new(1,1,1)
 			LeftContent.BackgroundTransparency = 1
 			LeftContent.BorderSizePixel = 0
-			LeftContent.BorderColor3 = Color3.new(0,0,0)
+			LeftContent.BorderColor3 = Library.Theme.Outline
 			LeftUIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 			LeftUIListLayout.Padding = UDim.new(0,4)
 			--
@@ -1322,7 +1714,7 @@ do
 			RightConnect.BackgroundColor3 = Color3.new(1,1,1)
 			RightConnect.BackgroundTransparency = 1
 			RightConnect.BorderSizePixel = 0
-			RightConnect.BorderColor3 = Color3.new(0,0,0)
+			RightConnect.BorderColor3 = Library.Theme.Outline
 			RightUIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 			RightUIListLayout.Padding = UDim.new(0,4)
 			--
@@ -1359,7 +1751,7 @@ do
                     if Index then
                         table.remove(Library.ThemeObjects, Index)
                     end
-                    Title.TextColor3 = Color3.fromRGB(78,78,78)
+                    Title.TextColor3 = Library.Theme.DimText
                 end
                 Library:SetTransparency(Accent, "BackgroundTransparency", Section.Open and 0 or 0.5)
             end;
@@ -1395,7 +1787,7 @@ do
 				Page     = self.Page,
 				Section  = self,
 				Text     = Properties.Text or Properties.Title or Properties.Name or "label",
-				Color    = Properties.Color or Color3.fromRGB(78, 78, 78),
+				Color    = Properties.Color or Library.Theme.DimText,
 				RichText = (Properties.RichText == true),
 				Align    = Properties.Alignment or Properties.Align or Enum.TextXAlignment.Left,
 				Height   = Properties.Height or Properties.Size or 15, -- row height
@@ -1499,8 +1891,8 @@ do
 			--
 			Frame.Position = UDim2.new(0,0,0,3)
 			Frame.Size = UDim2.new(0,6,0,6)
-			Frame.BackgroundColor3 = Color3.new(0.0784,0.0784,0.0784)
-			Frame.BorderColor3 = Color3.new(0,0,0)
+			Frame.BackgroundColor3 = Library.Theme.Element
+			Frame.BorderColor3 = Library.Theme.Outline
 			--
 			Accent.Name = "Accent"
 			Accent.Size = UDim2.new(1,0,1,0)
@@ -1525,7 +1917,7 @@ do
 			TextLabel.Size = UDim2.new(1,0,1,0)
 			TextLabel.BackgroundColor3 = Color3.new(1,1,1)
 			TextLabel.BackgroundTransparency = 1
-			TextLabel.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			TextLabel.TextColor3 = Library.Theme.DimText
 			TextLabel.FontFace = Library.UIFont
 			TextLabel.TextSize = Library.FontSize
 			TextLabel.ZIndex = 105
@@ -1537,10 +1929,10 @@ do
 				Toggle.Toggled = not Toggle.Toggled
 				if Toggle.Toggled then
 					Accent.Visible = true
-					TextLabel.TextColor3 = Color3.fromRGB(255,255,255)
+					TextLabel.TextColor3 = Library.Theme.Text
 				else
 					Accent.Visible = false
-					TextLabel.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+					TextLabel.TextColor3 = Library.Theme.DimText
 				end
 				Library.Flags[Toggle.Flag] = Toggle.Toggled
 				Toggle.Callback(Toggle.Toggled)
@@ -1607,7 +1999,7 @@ do
 				Value.BackgroundColor3 = Color3.new(1,1,1)
 				Value.BackgroundTransparency = 1
 				Value.Text = "[-]"
-				Value.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+				Value.TextColor3 = Library.Theme.DimText
 				Value.FontFace = Library.UIFont
 				Value.TextSize = Library.FontSize
 				Value.ZIndex = 105
@@ -1619,7 +2011,7 @@ do
 				Mode.BackgroundColor3 = Color3.new(1,1,1)
 				Mode.BackgroundTransparency = 1
 				Mode.Text = Keybind.Mode == "Hold" and "[H]" or Keybind.Mode == "Toggle" and "[T]" or "[A]"
-				Mode.TextColor3 = Color3.new(1,1,1)
+				Mode.TextColor3 = Library.Theme.Text
 				Mode.FontFace = Library.UIFont
 				Mode.TextSize = Library.FontSize
 				Mode.ZIndex = 105
@@ -1920,8 +2312,8 @@ do
 			--
 			Frame.Position = Slider.Name and UDim2.new(0,15,0,16) or UDim2.new(0,15,0,3)
 			Frame.Size = UDim2.new(1,-30,0,6)
-			Frame.BackgroundColor3 = Color3.new(0.0784,0.0784,0.0784)
-			Frame.BorderColor3 = Color3.new(0,0,0)
+			Frame.BackgroundColor3 = Library.Theme.Element
+			Frame.BorderColor3 = Library.Theme.Outline
 			Frame.AutoButtonColor = false
 			Frame.Text = ""
 			--
@@ -1964,7 +2356,7 @@ do
 				Title.Size = UDim2.new(1,0,0,10)
 				Title.BackgroundColor3 = Color3.new(1,1,1)
 				Title.BackgroundTransparency = 1
-				Title.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+				Title.TextColor3 = Library.Theme.DimText
 				Title.FontFace = Library.UIFont
 				Title.TextSize = Library.FontSize
 				Title.ZIndex = 105
@@ -1978,9 +2370,9 @@ do
 			plus.BackgroundColor3 = Color3.new(1,1,1)
 			plus.BackgroundTransparency = 1
 			plus.BorderSizePixel = 0
-			plus.BorderColor3 = Color3.new(0,0,0)
+			plus.BorderColor3 = Library.Theme.Outline
 			plus.Text = "+"
-			plus.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			plus.TextColor3 = Library.Theme.DimText
 			plus.FontFace = Library.UIFont
 			plus.TextSize = Library.FontSize
 			--
@@ -1990,9 +2382,9 @@ do
 			minus.BackgroundColor3 = Color3.new(1,1,1)
 			minus.BackgroundTransparency = 1
 			minus.BorderSizePixel = 0
-			minus.BorderColor3 = Color3.new(0,0,0)
+			minus.BorderColor3 = Library.Theme.Outline
 			minus.Text = "-"
-			minus.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			minus.TextColor3 = Library.Theme.DimText
 			minus.FontFace = Library.UIFont
 			minus.TextSize = Library.FontSize
 			--
@@ -2002,7 +2394,7 @@ do
 			Value.BackgroundColor3 = Color3.new(1,1,1)
 			Value.BackgroundTransparency = 1
 			Value.Text = "50%"
-			Value.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			Value.TextColor3 = Library.Theme.DimText
 			Value.FontFace = Library.UIFont
 			Value.TextSize = Library.FontSize
 			Value.ZIndex = 105
@@ -2015,14 +2407,14 @@ do
 				value = math.clamp(Library:Round(value, Slider.Decimals), Slider.Min, Slider.Max)
 
 				if value == Slider.Min then
-					Value.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+					Value.TextColor3 = Library.Theme.DimText
 					if Slider.Name then
-						Title.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+						Title.TextColor3 = Library.Theme.DimText
 					end
 				else
-					Value.TextColor3 = Color3.fromRGB(255,255,255)
+					Value.TextColor3 = Library.Theme.Text
 					if Slider.Name then
-						Title.TextColor3 = Color3.fromRGB(255,255,255)
+						Title.TextColor3 = Library.Theme.Text
 					end
 				end
 
@@ -2157,8 +2549,8 @@ do
 			--
 			Frame.Position = UDim2.new(0,15,0,16)
 			Frame.Size = UDim2.new(1,-30,0,15)
-			Frame.BackgroundColor3 = Color3.new(0.0784,0.0784,0.0784)
-			Frame.BorderColor3 = Color3.new(0,0,0)
+			Frame.BackgroundColor3 = Library.Theme.Element
+			Frame.BorderColor3 = Library.Theme.Outline
 			Frame.Text = ""
 			Frame.AutoButtonColor = false
 			--
@@ -2181,7 +2573,7 @@ do
 			Value.BackgroundColor3 = Color3.new(1,1,1)
 			Value.BackgroundTransparency = 1
 			Value.Text = ""
-			Value.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			Value.TextColor3 = Library.Theme.DimText
 			Value.FontFace = Library.UIFont
 			Value.TextSize = Library.FontSize
 			Value.ZIndex = 105
@@ -2195,7 +2587,7 @@ do
 			Icon.BackgroundTransparency = 1
 			Icon.BorderSizePixel = 0
 			Icon.Text = "-"
-			Icon.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			Icon.TextColor3 = Library.Theme.DimText
 			Icon.FontFace = Library.UIFont
 			Icon.TextSize = Library.FontSize
 			Icon.ZIndex = 105
@@ -2204,8 +2596,8 @@ do
 			Content.Name = "Content"
 			Content.Position = UDim2.new(0,0,0,18)
 			Content.Size = UDim2.new(1,0,0,0)
-			Content.BackgroundColor3 = Color3.new(0.0784,0.0784,0.0784)
-			Content.BorderColor3 = Color3.new(0,0,0)
+			Content.BackgroundColor3 = Library.Theme.Element
+			Content.BorderColor3 = Library.Theme.Outline
 			Content.Visible = false
 			Content.ZIndex = 110
 			Content.AutomaticSize = Enum.AutomaticSize.Y
@@ -2231,7 +2623,7 @@ do
 			Title.Size = UDim2.new(1,0,0,10)
 			Title.BackgroundColor3 = Color3.new(1,1,1)
 			Title.BackgroundTransparency = 1
-			Title.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			Title.TextColor3 = Library.Theme.DimText
 			Title.FontFace = Library.UIFont
 			Title.TextSize = Library.FontSize
 			Title.ZIndex = 105
@@ -2258,12 +2650,12 @@ do
 				button.MouseButton1Click:Connect(function()
 					for opt, tbl in next, Dropdown.OptionInsts do
 						if opt ~= option then
-							tbl.text.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+							tbl.text.TextColor3 = Library.Theme.DimText
 						end
 					end
 					Chosen = option
 					Value.Text = option
-					text.TextColor3 = Color3.fromRGB(255,255,255)
+					text.TextColor3 = Library.Theme.Text
 					Library.Flags[Dropdown.Flag] = option
 					Dropdown.Callback(option)
 				end)
@@ -2279,7 +2671,7 @@ do
 					Option.BackgroundColor3 = Color3.new(1,1,1)
 					Option.BackgroundTransparency = 1
 					Option.BorderSizePixel = 0
-					Option.BorderColor3 = Color3.new(0,0,0)
+					Option.BorderColor3 = Library.Theme.Outline
 					Option.Text = ""
 					Option.TextColor3 = Color3.new(0,0,0)
 					Option.AutoButtonColor = false
@@ -2294,9 +2686,9 @@ do
 					OptionName.BackgroundColor3 = Color3.new(1,1,1)
 					OptionName.BackgroundTransparency = 1
 					OptionName.BorderSizePixel = 0
-					OptionName.BorderColor3 = Color3.new(0,0,0)
+					OptionName.BorderColor3 = Library.Theme.Outline
 					OptionName.Text = option
-					OptionName.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+					OptionName.TextColor3 = Library.Theme.DimText
 					OptionName.FontFace = Library.UIFont
 					OptionName.TextSize = Library.FontSize
 					OptionName.TextXAlignment = Enum.TextXAlignment.Left
@@ -2311,13 +2703,13 @@ do
 			function Dropdown:Set(option)
 				for opt, tbl in next, Dropdown.OptionInsts do
 					if opt ~= option then
-						tbl.text.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+						tbl.text.TextColor3 = Library.Theme.DimText
 					end
 				end
 				if table.find(Dropdown.Options, option) then
 					Chosen = option
 					Value.Text = option
-					Dropdown.OptionInsts[option].text.TextColor3 = Color3.fromRGB(255,255,255)
+					Dropdown.OptionInsts[option].text.TextColor3 = Library.Theme.Text
 					Library.Flags[Dropdown.Flag] = Chosen
 					Dropdown.Callback(Chosen)
 				else
@@ -2419,8 +2811,8 @@ do
 			--
 			Frame.Position = UDim2.new(0,15,0,16)
 			Frame.Size = UDim2.new(1,-30,0,15)
-			Frame.BackgroundColor3 = Color3.new(0.0784,0.0784,0.0784)
-			Frame.BorderColor3 = Color3.new(0,0,0)
+			Frame.BackgroundColor3 = Library.Theme.Element
+			Frame.BorderColor3 = Library.Theme.Outline
 			Frame.Text = ""
 			Frame.AutoButtonColor = false
 			--
@@ -2443,7 +2835,7 @@ do
 			Value.BackgroundColor3 = Color3.new(1,1,1)
 			Value.BackgroundTransparency = 1
 			Value.Text = ""
-			Value.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			Value.TextColor3 = Library.Theme.DimText
 			Value.FontFace = Library.UIFont
 			Value.TextTruncate = Enum.TextTruncate.SplitWord
 			Value.TextSize = Library.FontSize
@@ -2458,7 +2850,7 @@ do
 			Icon.BackgroundTransparency = 1
 			Icon.BorderSizePixel = 0
 			Icon.Text = "-"
-			Icon.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			Icon.TextColor3 = Library.Theme.DimText
 			Icon.FontFace = Library.UIFont
 			Icon.TextSize = Library.FontSize
 			Icon.ZIndex = 105
@@ -2467,8 +2859,8 @@ do
 			Content.Name = "Content"
 			Content.Position = UDim2.new(0,0,0,18)
 			Content.Size = UDim2.new(1,0,0,0)
-			Content.BackgroundColor3 = Color3.new(0.0784,0.0784,0.0784)
-			Content.BorderColor3 = Color3.new(0,0,0)
+			Content.BackgroundColor3 = Library.Theme.Element
+			Content.BorderColor3 = Library.Theme.Outline
 			Content.Visible = false
 			Content.ZIndex = 110
 			Content.AutomaticSize = Enum.AutomaticSize.Y
@@ -2494,7 +2886,7 @@ do
 			Title.Size = UDim2.new(1,0,0,10)
 			Title.BackgroundColor3 = Color3.new(1,1,1)
 			Title.BackgroundTransparency = 1
-			Title.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			Title.TextColor3 = Library.Theme.DimText
 			Title.FontFace = Library.UIFont
 			Title.TextSize = Library.FontSize
 			Title.ZIndex = 105
@@ -2533,13 +2925,13 @@ do
 
 							Value.Text = #chosen == 0 and "" or table.concat(textchosen, ", ") .. (cutobject and ", ..." or "")
 
-							text.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+							text.TextColor3 = Library.Theme.DimText
 
 							Library.Flags[Dropdown.Flag] = chosen
 							Dropdown.Callback(chosen)
 						else
 							if #chosen == Dropdown.Max then
-								Dropdown.OptionInsts[chosen[1]].text.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+								Dropdown.OptionInsts[chosen[1]].text.TextColor3 = Library.Theme.DimText
 
 								table.remove(chosen, 1)
 							end
@@ -2555,7 +2947,7 @@ do
 
 							Value.Text = #chosen == 0 and "" or table.concat(textchosen, ", ") .. (cutobject and ", ..." or "")
 
-							text.TextColor3 = Color3.fromRGB(255,255,255)
+							text.TextColor3 = Library.Theme.Text
 
 							Library.Flags[Dropdown.Flag] = chosen
 							Dropdown.Callback(chosen)
@@ -2574,7 +2966,7 @@ do
 					Option.BackgroundColor3 = Color3.new(1,1,1)
 					Option.BackgroundTransparency = 1
 					Option.BorderSizePixel = 0
-					Option.BorderColor3 = Color3.new(0,0,0)
+					Option.BorderColor3 = Library.Theme.Outline
 					Option.Text = ""
 					Option.TextColor3 = Color3.new(0,0,0)
 					Option.AutoButtonColor = false
@@ -2589,9 +2981,9 @@ do
 					OptionName.BackgroundColor3 = Color3.new(1,1,1)
 					OptionName.BackgroundTransparency = 1
 					OptionName.BorderSizePixel = 0
-					OptionName.BorderColor3 = Color3.new(0,0,0)
+					OptionName.BorderColor3 = Library.Theme.Outline
 					OptionName.Text = option
-					OptionName.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+					OptionName.TextColor3 = Library.Theme.DimText
 					OptionName.FontFace = Library.UIFont
 					OptionName.TextSize = Library.FontSize
 					OptionName.TextXAlignment = Enum.TextXAlignment.Left
@@ -2612,14 +3004,14 @@ do
 					for opt, tbl in next, Dropdown.OptionInsts do
 						if not table.find(option, opt) then
 							--tbl.button.Transparency = 0
-							tbl.text.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+							tbl.text.TextColor3 = Library.Theme.DimText
 						end
 					end
 
 					for i, opt in next, option do
 						if table.find(Dropdown.Options, opt) and #chosen < Dropdown.Max then
 							table.insert(chosen, opt)
-							Dropdown.OptionInsts[opt].text.TextColor3 = Color3.fromRGB(255,255,255)
+							Dropdown.OptionInsts[opt].text.TextColor3 = Library.Theme.Text
 						end
 					end
 
@@ -2731,7 +3123,7 @@ do
 			Title.Size = UDim2.new(1,-30,1,0)
 			Title.BackgroundColor3 = Color3.new(1,1,1)
 			Title.BackgroundTransparency = 1
-			Title.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			Title.TextColor3 = Library.Theme.DimText
 			Title.FontFace = Library.UIFont
 			Title.TextSize = Library.FontSize
 			Title.ZIndex = 105
@@ -2744,7 +3136,7 @@ do
 			Value.BackgroundColor3 = Color3.new(1,1,1)
 			Value.BackgroundTransparency = 1
 			Value.Text = "[-]"
-			Value.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			Value.TextColor3 = Library.Theme.DimText
 			Value.FontFace = Library.UIFont
 			Value.TextSize = Library.FontSize
 			Value.ZIndex = 105
@@ -2756,7 +3148,7 @@ do
 			Mode.BackgroundColor3 = Color3.new(1,1,1)
 			Mode.BackgroundTransparency = 1
 			Mode.Text = Keybind.Mode == "Hold" and "[H]" or Keybind.Mode == "Toggle" and "[T]" or "[A]"
-			Mode.TextColor3 = Color3.new(1,1,1)
+			Mode.TextColor3 = Library.Theme.Text
 			Mode.FontFace = Library.UIFont
 			Mode.TextSize = Library.FontSize
 			Mode.ZIndex = 105
@@ -2965,13 +3357,13 @@ do
 			Holder.BackgroundColor3 = Color3.new(1,1,1)
 			Holder.BackgroundTransparency = 1
 			Holder.BorderSizePixel = 0
-			Holder.BorderColor3 = Color3.new(0,0,0)
+			Holder.BorderColor3 = Library.Theme.Outline
 			--
 			TextFrame.Name = "TextFrame"
 			TextFrame.Position = UDim2.new(0,15,0,0)
 			TextFrame.Size = UDim2.new(1,-30,1,0)
-			TextFrame.BackgroundColor3 = Color3.new(0.0784,0.0784,0.0784)
-			TextFrame.BorderColor3 = Color3.new(0,0,0)
+			TextFrame.BackgroundColor3 = Library.Theme.Element
+			TextFrame.BorderColor3 = Library.Theme.Outline
 			--
 			Gradient.Name = "Gradient"
 			Gradient.Color = ColorSequence.new{
@@ -2990,13 +3382,13 @@ do
 			TextBox.BackgroundColor3 = Color3.new(1,1,1)
 			TextBox.BackgroundTransparency = 1
 			TextBox.BorderSizePixel = 0
-			TextBox.BorderColor3 = Color3.new(0,0,0)
+			TextBox.BorderColor3 = Library.Theme.Outline
 			TextBox.Text = Textbox.State
-			TextBox.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			TextBox.TextColor3 = Library.Theme.DimText
 			TextBox.FontFace = Library.UIFont
 			TextBox.TextSize = Library.FontSize
 			TextBox.PlaceholderText = Textbox.Placeholder
-			TextBox.PlaceholderColor3 = Color3.new(0.3059,0.3059,0.3059)
+			TextBox.PlaceholderColor3 = Library.Theme.DimText
 			TextBox.ClearTextOnFocus = false
 			TextBox.TextWrapped = true
 
@@ -3051,13 +3443,13 @@ do
 			Holder.BackgroundColor3 = Color3.new(1,1,1)
 			Holder.BackgroundTransparency = 1
 			Holder.BorderSizePixel = 0
-			Holder.BorderColor3 = Color3.new(0,0,0)
+			Holder.BorderColor3 = Library.Theme.Outline
 			--
 			TextFrame.Name = "TextFrame"
 			TextFrame.Position = UDim2.new(0,15,0,0)
 			TextFrame.Size = UDim2.new(1,-30,1,0)
-			TextFrame.BackgroundColor3 = Color3.new(0.0784,0.0784,0.0784)
-			TextFrame.BorderColor3 = Color3.new(0,0,0)
+			TextFrame.BackgroundColor3 = Library.Theme.Element
+			TextFrame.BorderColor3 = Library.Theme.Outline
 			--
 			Gradient.Name = "Gradient"
 			Gradient.Color = ColorSequence.new{
@@ -3077,9 +3469,9 @@ do
 			Textbutton.BackgroundColor3 = Color3.new(1,1,1)
 			Textbutton.BackgroundTransparency = 1
 			Textbutton.BorderSizePixel = 0
-			Textbutton.BorderColor3 = Color3.new(0,0,0)
+			Textbutton.BorderColor3 = Library.Theme.Outline
 			Textbutton.Text = Button.Name
-			Textbutton.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			Textbutton.TextColor3 = Library.Theme.DimText
 			Textbutton.FontFace = Library.UIFont
 			Textbutton.TextSize = Library.FontSize
 
@@ -3089,11 +3481,11 @@ do
 			end)
 			--
 			Textbutton.MouseButton1Down:Connect(function()
-				Textbutton.TextColor3 = Color3.fromRGB(255,255,255)
+				Textbutton.TextColor3 = Library.Theme.Text
 			end)
 			--
 			Textbutton.MouseButton1Up:Connect(function()
-				Textbutton.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+				Textbutton.TextColor3 = Library.Theme.DimText
 			end)
 
 			-- // Return
@@ -3160,7 +3552,7 @@ do
 			TextLabel.Size = UDim2.new(1,0,1,0)
 			TextLabel.BackgroundColor3 = Color3.new(1,1,1)
 			TextLabel.BackgroundTransparency = 1
-			TextLabel.TextColor3 = Color3.new(0.3059,0.3059,0.3059)
+			TextLabel.TextColor3 = Library.Theme.DimText
 			TextLabel.FontFace = Library.UIFont
 			TextLabel.TextSize = Library.FontSize
 			TextLabel.ZIndex = 105
